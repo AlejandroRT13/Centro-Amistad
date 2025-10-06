@@ -77,19 +77,22 @@
 
     <!-- Register -->
     <div class="row g-2 mb-3">
-      <div class="col-md-4">
+      <div class="col-md-3">
         <label>Día</label>
         <select id="daySelect" class="form-select"><option value="">-- Genera las fechas --</option></select>
       </div>
-      <div class="col-md-4">
+
+      <div class="col-md-5">
         <label>Nombre</label>
-        <select id="attName" class="form-select">
-          <option value="">-- Selecciona o escribe nombre --</option>
-        </select>
+        <!-- input con datalist para sugerencias y permitir escribir -->
+        <input id="attName" class="form-control" list="namesList" placeholder="Escribe o selecciona nombre">
+        <datalist id="namesList"></datalist>
       </div>
+
       <div class="col-md-2"><label>Grupo</label><input id="attGroup" class="form-control"></div>
       <div class="col-md-2"><label>Teléfono</label><input id="attPhone" class="form-control" inputmode="tel"></div>
     </div>
+
     <div class="d-flex gap-2 mb-3">
       <button id="btnAdd" class="btn btn-success">Agregar registro</button>
       <button id="btnClear" class="btn btn-outline-secondary">Limpiar</button>
@@ -117,15 +120,17 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
 
 <script>
-const KEY = 'asistencia_app_v3';
+/* ---------- STORAGE & STATE ---------- */
+const KEY = 'asistencia_app_v4';
 const DEFAULT_STORE = { users: { admin: '1234' }, startDate: null, counter: 0, dates: [], records: [] };
 
 function loadStore(){ try{ const raw = localStorage.getItem(KEY); if(!raw){ localStorage.setItem(KEY, JSON.stringify(DEFAULT_STORE)); return JSON.parse(JSON.stringify(DEFAULT_STORE)); } return JSON.parse(raw); } catch(e){ localStorage.setItem(KEY, JSON.stringify(DEFAULT_STORE)); return JSON.parse(JSON.stringify(DEFAULT_STORE)); } }
-function saveStore(s){ localStorage.setItem(KEY, JSON.stringify(s)); }
+function saveStore(){ localStorage.setItem(KEY, JSON.stringify(store)); }
 
 let store = loadStore();
 let currentUser = null;
 
+/* ---------- ELEMENTS ---------- */
 const loginCard = document.getElementById('loginCard');
 const loginUser = document.getElementById('loginUser');
 const loginPass = document.getElementById('loginPass');
@@ -150,6 +155,7 @@ const daySelect = document.getElementById('daySelect');
 const btnAdd = document.getElementById('btnAdd');
 const btnClear = document.getElementById('btnClear');
 const attName = document.getElementById('attName');
+const namesList = document.getElementById('namesList');
 const attGroup = document.getElementById('attGroup');
 const attPhone = document.getElementById('attPhone');
 const daysGrid = document.getElementById('daysGrid');
@@ -159,14 +165,367 @@ const btnExportPDF = document.getElementById('btnExportPDF');
 const btnFinal = document.getElementById('btnFinal');
 const finalReportArea = document.getElementById('finalReportArea');
 
+/* ---------- INITIAL UI ---------- */
 function initUI(){
   store = loadStore();
   counterInit.value = store.counter || 0;
   if(store.startDate) startDateEl.value = store.startDate;
-  if(store.dates && store.dates.length===8) {
-    buildDaySelect(store.dates);
-    renderDaysOverview();
-  } else { daySelect.innerHTML = '<option value="">-- Genera las fechas --</option>'; }
+  if(store.dates && store.dates.length===8){ buildDaySelect(store.dates); renderDaysOverview(); } else { daySelect.innerHTML = '<option value="">-- Genera las fechas --</option>'; }
   renderUsersList();
 }
-initUI
+initUI();
+
+/* ---------- LOGIN & ADMIN ---------- */
+btnLogin.addEventListener('click', ()=>{
+  const u = (loginUser.value||'').trim(), p = (loginPass.value||'').trim();
+  if(!u||!p){ alert('Escribe usuario y contraseña'); return; }
+  if(store.users && store.users[u] && store.users[u] === p){
+    currentUser = u;
+    afterLogin();
+  } else {
+    alert('Usuario o contraseña incorrecta');
+  }
+});
+
+btnOpenAdmin.addEventListener('click', ()=>{
+  // Simple prompt modal: request admin credentials to open admin panel
+  const u = prompt('Usuario administrador:','admin');
+  const p = prompt('Contraseña administrador:','');
+  if(u === 'admin' && store.users && store.users['admin'] === p){
+    currentUser = 'admin';
+    afterLogin();
+    adminPanel.style.display = 'block';
+  } else {
+    alert('Credenciales de administrador incorrectas');
+  }
+});
+
+btnLogout.addEventListener('click', ()=>{ currentUser = null; appCard.style.display='none'; loginCard.style.display='block'; adminPanel.style.display='none'; whoEl.textContent=''; loginUser.value=''; loginPass.value=''; });
+
+btnReset.addEventListener('click', ()=>{ if(confirm('Borrar todos los datos locales (usuarios y registros)?')){ localStorage.removeItem(KEY); store = loadStore(); location.reload(); } });
+
+function afterLogin(){
+  loginCard.style.display = 'none';
+  appCard.style.display = 'block';
+  whoEl.textContent = currentUser;
+  adminPanel.style.display = (currentUser === 'admin') ? 'block' : 'none';
+  // ensure UI shows dates and overview
+  if(store.dates && store.dates.length===8){ buildDaySelect(store.dates); renderDaysOverview(); }
+  renderNameSuggestions(); // build datalist
+}
+
+/* Admin: create user */
+btnCreateUser.addEventListener('click', ()=>{
+  const u = (newUserEl.value||'').trim(), p = (newPassEl.value||'').trim();
+  if(!u||!p) return alert('Nombre de usuario y contraseña requeridos');
+  if(!store.users) store.users = {};
+  if(store.users[u]) return alert('Usuario ya existe');
+  store.users[u] = p;
+  saveStore();
+  newUserEl.value=''; newPassEl.value='';
+  renderUsersList();
+  alert('Usuario creado');
+});
+
+/* Render users list for admin */
+function renderUsersList(){
+  usersList.innerHTML = '';
+  const ul = document.createElement('ul'); ul.className='list-group';
+  Object.keys(store.users || {}).forEach(u=>{
+    const li = document.createElement('li'); li.className='list-group-item d-flex justify-content-between align-items-center';
+    li.innerHTML = `<div><strong>${u}</strong> ${u==='admin'?'<span class="small-note">(admin)</span>':''}</div>`;
+    const btn = document.createElement('button'); btn.className='btn btn-sm btn-outline-danger'; btn.textContent='Eliminar';
+    btn.onclick = ()=>{
+      if(u==='admin'){ alert('No se puede eliminar admin'); return; }
+      if(!confirm('Eliminar usuario '+u+'?')) return;
+      delete store.users[u]; saveStore(); renderUsersList();
+    };
+    li.appendChild(btn);
+    ul.appendChild(li);
+  });
+  usersList.appendChild(ul);
+}
+
+/* ---------- DATES: generate & build select ---------- */
+function parseDateInputToDate(input){
+  const parts = (input||'').split('-').map(Number);
+  return new Date(parts[0], parts[1]-1, parts[2]);
+}
+
+btnGenerate.addEventListener('click', ()=>{
+  const input = startDateEl.value;
+  if(!input) return alert('Selecciona la fecha de inicio');
+  const base = parseDateInputToDate(input);
+  const arr = [];
+  for(let i=0;i<8;i++){
+    const d = new Date(base.getFullYear(), base.getMonth(), base.getDate()+i);
+    arr.push(d.toISOString().slice(0,10));
+  }
+  store.dates = arr;
+  store.startDate = input;
+  saveStore();
+  buildDaySelect(arr);
+  renderDaysOverview();
+  alert('Se generaron 8 fechas desde ' + arr[0]);
+});
+
+function buildDaySelect(dates){
+  daySelect.innerHTML = '';
+  dates.forEach((iso,i)=>{
+    const opt = document.createElement('option'); opt.value = i; opt.textContent = `Día ${i+1} — ${iso}`; daySelect.appendChild(opt);
+  });
+  // when day changes, update name suggestions based on previous days
+  daySelect.addEventListener('change', ()=>{ renderNameSuggestions(); onNameInputChange(); });
+}
+
+/* ---------- Name suggestions & autocompletion logic ---------- */
+
+/*
+Behavior:
+- attName is an input with datalist namesList.
+- When a day is selected, datalist includes names that were registered on any previous day (< dayIndex).
+- When user types/selects a name:
+   - If the name exists in previous days: autocompleta grupo/teléfono con the most recent previous record and DISABLES group/phone inputs (they remain readable).
+   - If name doesn't exist in previous days: group/phone are ENABLED and cleared (user must enter them).
+*/
+
+function renderNameSuggestions(){
+  namesList.innerHTML = '';
+  const dayIndex = parseInt(daySelect.value);
+  const namesSet = new Set();
+  if(!isNaN(dayIndex)){
+    (store.records || []).forEach(r=>{
+      if(r.dayIndex < dayIndex){ namesSet.add(r.name); }
+    });
+  }
+  // Add all previous names as options
+  Array.from(namesSet).sort().forEach(n=>{
+    const opt = document.createElement('option'); opt.value = n; namesList.appendChild(opt);
+  });
+}
+
+/* When user types/selects a name, try to autocompletar */
+function onNameInputChange(){
+  const name = (attName.value||'').trim();
+  attGroup.value = attGroup.value || '';
+  attPhone.value = attPhone.value || '';
+  if(!name){
+    attGroup.value=''; attPhone.value=''; enableGroupPhone(true); return;
+  }
+  const dayIndex = parseInt(daySelect.value);
+  if(isNaN(dayIndex)){
+    // no day selected yet
+    enableGroupPhone(true);
+    return;
+  }
+  // find latest record for that name in days previous to selected day
+  let latest = null;
+  (store.records || []).forEach(r=>{
+    if(r.name === name && r.dayIndex < dayIndex){
+      if(!latest || new Date(r.createdAt) > new Date(latest.createdAt)) latest = r;
+    }
+  });
+  if(latest){
+    // autocompleta y bloquea group/phone
+    attGroup.value = latest.group || '';
+    attPhone.value = latest.phone || '';
+    enableGroupPhone(false);
+  } else {
+    // allow user to provide group/phone
+    attGroup.value = '';
+    attPhone.value = '';
+    enableGroupPhone(true);
+  }
+}
+
+/* Enable or disable group/phone fields (disabled => readonly appearance) */
+function enableGroupPhone(enable){
+  if(enable){
+    attGroup.removeAttribute('disabled');
+    attPhone.removeAttribute('disabled');
+    attGroup.style.background = '';
+    attPhone.style.background = '';
+  } else {
+    attGroup.setAttribute('disabled','true');
+    attPhone.setAttribute('disabled','true');
+    attGroup.style.background = '#efefef';
+    attPhone.style.background = '#efefef';
+  }
+}
+
+/* Trigger name input change when attName input changes */
+attName.addEventListener('input', onNameInputChange);
+
+/* Also update suggestions when startDate or records change */
+function refreshAfterRecordsChange(){
+  renderNameSuggestions();
+  renderDaysOverview();
+}
+
+/* ---------- REGISTER attendance ---------- */
+btnAdd.addEventListener('click', ()=>{
+  if(!currentUser) return alert('Inicia sesión primero');
+  if(!store.dates || store.dates.length<8) return alert('Genera las 8 fechas antes de registrar');
+  const dayIndex = parseInt(daySelect.value);
+  if(isNaN(dayIndex)) return alert('Selecciona un día');
+  const name = (attName.value||'').trim();
+  if(!name) return alert('Escribe o selecciona un nombre');
+  // If name existed in previous days, group/phone might be disabled and already filled
+  const group = (attGroup.value||'').trim();
+  const phone = (attPhone.value||'').trim();
+  // If group/phone are empty AND name not present previously (meaning user forgot), require them
+  // But if name existed previously, group/phone are filled.
+  const existedPreviously = (() => {
+    const di = dayIndex;
+    return (store.records || []).some(r => r.name === name && r.dayIndex < di);
+  })();
+  if(!existedPreviously && (!group || !phone)) return alert('Nombre nuevo: captura Grupo y Teléfono');
+  // increment counter
+  store.counter = (parseInt(store.counter)||0) + 1;
+  const rec = {
+    id: Math.random().toString(36).slice(2,9),
+    number: store.counter,
+    name,
+    group,
+    phone,
+    dateISO: store.dates[dayIndex],
+    dayIndex,
+    registeredBy: currentUser,
+    createdAt: new Date().toISOString()
+  };
+  store.records = store.records || [];
+  store.records.push(rec);
+  saveStore();
+  // after adding, refresh name suggestions and overview
+  attName.value=''; attGroup.value=''; attPhone.value='';
+  enableGroupPhone(true);
+  counterInit.value = store.counter;
+  refreshAfterRecordsChange();
+});
+
+/* Clear inputs */
+btnClear.addEventListener('click', ()=>{ attName.value=''; attGroup.value=''; attPhone.value=''; enableGroupPhone(true); });
+
+/* ---------- RENDER days overview ---------- */
+function renderDaysOverview(){
+  daysGrid.innerHTML = '';
+  if(!store.dates || store.dates.length<8){
+    daysGrid.innerHTML = '<div class="small-note">No hay fechas generadas.</div>'; return;
+  }
+  for(let i=0;i<8;i++){
+    const col = document.createElement('div'); col.className='col-6 mb-2';
+    const card = document.createElement('div'); card.className='card p-2';
+    const title = document.createElement('div'); title.innerHTML = `<strong>Día ${i+1}</strong> <div class="small-note">${store.dates[i]}</div>`;
+    card.appendChild(title);
+    const rows = (store.records||[]).filter(r=>r.dayIndex===i).sort((a,b)=>a.number-b.number);
+    if(rows.length===0){
+      const p = document.createElement('div'); p.className='small-note mt-2'; p.textContent='Sin registros';
+      card.appendChild(p);
+    } else {
+      const ul = document.createElement('ul'); ul.className='list-group list-group-flush mt-2';
+      rows.forEach(r=>{
+        const li = document.createElement('li'); li.className='list-group-item py-1';
+        li.innerHTML = `<strong>#${r.number}</strong> — ${r.name} <div class="small-note">(${r.group||'-'} • ${r.phone||'-'}) — capturado por: ${r.registeredBy}</div>`;
+        ul.appendChild(li);
+      });
+      card.appendChild(ul);
+    }
+    col.appendChild(card); daysGrid.appendChild(col);
+  }
+}
+
+/* ---------- EXPORT functions ---------- */
+btnExportXLS.addEventListener('click', ()=>{
+  const recs = store.records || [];
+  if(recs.length===0) return alert('No hay registros para exportar');
+  const aoa = [['Número','Nombre','Grupo','Teléfono','Fecha ISO','Día','RegistradoPor','CreadoAt']];
+  recs.forEach(r=> aoa.push([r.number, r.name, r.group, r.phone, r.dateISO, r.dayIndex+1, r.registeredBy, r.createdAt]));
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Asistencia');
+  XLSX.writeFile(wb, 'asistencia_8dias.xlsx');
+});
+
+btnExportPDF.addEventListener('click', ()=>{
+  const recs = store.records || [];
+  if(recs.length===0) return alert('No hay registros para exportar');
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF('p','pt','a4');
+  doc.setFontSize(12); doc.text('Reporte de Asistencia - 8 Días', 40, 40);
+  doc.setFontSize(10); doc.text('Generado: ' + new Date().toLocaleString(), 40, 56);
+  let y = 72;
+  for(let i=0;i<8;i++){
+    doc.setFontSize(11); doc.text(`Día ${i+1} — ${store.dates[i]}`, 40, y); y += 12;
+    const rows = (store.records||[]).filter(r=>r.dayIndex===i).sort((a,b)=>a.number-b.number)
+      .map(r=> [String(r.number), r.name, r.group||'-', r.phone||'-', r.registeredBy]);
+    if(rows.length===0){
+      doc.setFontSize(10); doc.text('(Sin registros)', 60, y); y += 18;
+    } else {
+      doc.autoTable({ startY: y, head:[['#','Nombre','Grupo','Teléfono','Registrado por']], body: rows, margin:{left:40,right:40}, styles:{fontSize:9} });
+      y = doc.lastAutoTable.finalY + 8;
+    }
+    if(y > 720){ doc.addPage(); y = 40; }
+  }
+  doc.save('reporte_asistencia_8dias.pdf');
+});
+
+/* ---------- FINAL consolidated report (unique days per person) ---------- */
+btnFinal.addEventListener('click', ()=>{
+  const recs = store.records || [];
+  if(!store.dates || store.dates.length<8) return alert('Genera las 8 fechas primero');
+  if(recs.length===0) return alert('No hay registros aún');
+
+  // Map name -> Set of unique dates
+  const map = {}; // name -> Set(dates)
+  recs.forEach(r=>{
+    const key = r.name.trim();
+    if(!key) return;
+    if(!map[key]) map[key] = new Set();
+    map[key].add(r.dateISO); // Set prevents duplicates same day
+  });
+
+  // Build table rows
+  const rows = [];
+  finalReportArea.innerHTML = '<h5>Reporte final — Asistencia por persona</h5>';
+  const table = document.createElement('table'); table.className = 'table table-sm table-bordered';
+  const thead = document.createElement('thead'); thead.innerHTML = '<tr><th>Nombre</th><th>Días asistidos</th><th>Fechas</th></tr>'; table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  Object.keys(map).sort().forEach(name=>{
+    const dates = Array.from(map[name]).sort();
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${name}</td><td>${dates.length}</td><td>${dates.join(', ')}</td>`;
+    tbody.appendChild(tr);
+    rows.push({Nombre:name, Dias:dates.length, Fechas:dates.join(', ')});
+  });
+  table.appendChild(tbody);
+
+  // Export buttons for this report
+  const exportBtns = document.createElement('div'); exportBtns.className='mt-2 mb-2 d-flex gap-2';
+  const btnX = document.createElement('button'); btnX.className='btn btn-outline-success btn-sm'; btnX.textContent='Exportar resumen a Excel';
+  btnX.onclick = ()=>{ if(rows.length===0) return alert('No hay datos'); const aoa = [['Nombre','Días asistidos','Fechas']]; rows.forEach(r=> aoa.push([r.Nombre, r.Dias, r.Fechas])); const ws = XLSX.utils.aoa_to_sheet(aoa); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Resumen'); XLSX.writeFile(wb, 'resumen_asistencia.xlsx'); };
+  const btnP = document.createElement('button'); btnP.className='btn btn-outline-primary btn-sm'; btnP.textContent='Exportar resumen a PDF';
+  btnP.onclick = ()=>{ if(rows.length===0) return alert('No hay datos'); const { jsPDF } = window.jspdf; const doc = new jsPDF('p','pt','a4'); doc.setFontSize(12); doc.text('Resumen final de asistencia', 40, 40); doc.setFontSize(10); doc.text('Generado: ' + new Date().toLocaleString(), 40, 56); const body = rows.map(r=> [r.Nombre, String(r.Dias), r.Fechas]); doc.autoTable({ startY: 72, head:[['Nombre','Días','Fechas']], body, margin:{left:40,right:40}, styles:{fontSize:9} }); doc.save('resumen_asistencia.pdf'); };
+
+  finalReportArea.innerHTML = '';
+  finalReportArea.appendChild(table);
+  exportBtns.appendChild(btnX); exportBtns.appendChild(btnP);
+  finalReportArea.appendChild(exportBtns);
+});
+
+/* ---------- Helpers ---------- */
+function renderNameSuggestionsOnStart(){
+  // Called during init and after record changes
+  renderNameSuggestions();
+}
+function renderNameSuggestions(){
+  // Build datalist options based on ALL names from store.records (useful if no day selected)
+  const names = new Set((store.records||[]).map(r=>r.name));
+  namesList.innerHTML = '';
+  Array.from(names).sort().forEach(n=>{ const opt = document.createElement('option'); opt.value = n; namesList.appendChild(opt); });
+}
+
+/* ---------- ensure overview initially updated ---------- */
+renderDaysOverview();
+renderNameSuggestionsOnStart();
+</script>
+</body>
+</html>
